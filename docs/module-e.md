@@ -2,77 +2,84 @@
 
 ## Goal
 
-The DNS monitoring platform must prove that it works in both normal and degraded network conditions. Module E compares a healthy baseline against a constrained network and shows how the service behaves when latency, loss, or bandwidth limits are introduced.
+Compare API performance under a normal network path and a controlled delay.
+The test uses the Compose client for both runs so the `tc` impairment affects
+the benchmark traffic.
 
-The required evidence is a before/after measurement table and a short explanation of whether the bottleneck is in the network path or in the application itself.
+## Setup and baseline
 
-## Baseline measurement
-
-Start from the normal stack and confirm the API is reachable:
+Run these commands from the repository root. Rebuild the client so it includes
+ApacheBench (`ab`) and start the services:
 
 ```sh
 docker compose -f docker/docker-compose.yml up --build -d
-curl -sS -w 'time_namelookup=%{time_namelookup} time_connect=%{time_connect} time_total=%{time_total} http_code=%{http_code}\n' \
-  http://127.0.0.1:8000/health
+docker compose -f docker/docker-compose.yml exec client \
+  curl -fsS http://172.28.10.1:8000/health
 ```
 
-Capture 10–20 healthy requests and record the median RTT, total request time, and HTTP success rate. The same client-to-API path should be used for every run so the comparison stays fair.
-
-## Introduce a controlled impairment
-
-Use `tc/netem` to add delay and loss between the client and API path. On the host, or inside the client container when `tc` is available, apply a small impairment such as:
+Run 100 requests with concurrency 10 from the client container. Capture the
+benchmark summary as the **baseline** screenshot:
 
 ```sh
-docker compose -f docker/docker-compose.yml exec client sh -c '
-  tc qdisc add dev eth0 root netem delay 100ms loss 2% rate 5mbit
-'
+docker compose -f docker/docker-compose.yml exec -T client \
+  ab -n 100 -c 10 http://172.28.10.1:8000/health
 ```
 
-Then rerun the same check repeatedly:
+Record `Complete requests`, `Failed requests`, and the `mean` value in the
+`Total` row under `Connection Times (ms)`. The success count is completed
+requests minus failed requests; calculate the success rate as
+`success count / 100 * 100%`. Take a screenshot that includes these summary
+values.
+
+## Apply delay and measure again
+
+Add a 100 ms egress delay to the Compose client's `eth0`, confirm the qdisc is
+active, then rerun the identical benchmark. Capture the qdisc and benchmark
+summary as the **impaired** screenshot.
 
 ```sh
 docker compose -f docker/docker-compose.yml exec client \
-  sh -c 'for i in $(seq 1 10); do curl -sS -w "time_total=%{time_total} http_code=%{http_code}\n" http://172.28.10.1:8000/health; done'
+  tc qdisc add dev eth0 root netem delay 100ms
+
+docker compose -f docker/docker-compose.yml exec client \
+  tc qdisc show dev eth0
+
+docker compose -f docker/docker-compose.yml exec -T client \
+  ab -n 100 -c 10 http://172.28.10.1:8000/health
 ```
 
-When the test is complete, remove the impairment:
+The client has `NET_ADMIN` so `tc` can configure its own interface. Run the
+benchmark from that same container: a host request to `localhost:8000` does
+not traverse the client's impaired interface. Remove the impairment after the
+test, even if you are done collecting screenshots:
 
 ```sh
-docker compose -f docker/docker-compose.yml exec client sh -c 'tc qdisc del dev eth0 root || true'
+docker compose -f docker/docker-compose.yml exec client \
+  tc qdisc del dev eth0 root
 ```
 
-## Evidence to collect
+## Results
 
-Record the following for each run:
+The following values were measured against the running stack in this workspace
+with the commands above. Results vary by host; rerun the test and replace these
+values with your own before submitting. Use the `Connection Times (ms) → Total
+→ mean` field for the latency column.
 
-- HTTP status code
-- total request time (`time_total`)
-- connect time and DNS lookup time
-- number of successful requests out of the total attempts
-- observed error or timeout behavior when a threshold is crossed
+| Condition | Requests (successful / 100) | Success rate | Mean latency |
+| --- | ---: | ---: | ---: |
+| Baseline | 100 / 100 | 100% | 11 ms |
+| 100 ms netem delay | 100 / 100 | 100% | 208 ms |
 
-Example table:
-
-| Condition | Requests | Median RTT | Success rate | Notes |
-| --- | ---: | ---: | ---: | --- |
-| Healthy baseline | 20 | 5 ms | 100% | Normal API path |
-| 100 ms delay + 2% loss | 20 | 116 ms | 95% | Slower but still available |
-| Severe loss / bandwidth cap | 20 | 650 ms+ | <100% | Queueing and retries visible |
-
-## Interpretation
-
-A healthy baseline should show low and stable end-to-end latency. After applying `tc/netem`, the same workload should slow down measurably but remain functionally correct unless the impairment exceeds the service or network tolerance. The main goal is to show that increased network delay or packet loss caused the observed slowdown, not that the application logic failed by itself.
-
-For a submission packet, include:
-
-- the exact curl timing output for the baseline and degraded tests
-- the `tc` command used to create the impairment
-- a short comparison table explaining the change in latency and availability
-- a note distinguishing network delay from API processing time
+Include screenshots of the baseline `ab` summary, the active `tc qdisc`, and
+the impaired `ab` summary. Explain whether latency increased and whether the
+service remained available. The configured 100 ms is an egress delay, not a
+guaranteed measured latency; observed request times also include TCP,
+application, and benchmark overhead.
 
 ## Submission checklist
 
-- Baseline health-check timing output
-- Degraded-path timing output
-- `tc/netem` rules or equivalent impairment command
-- Short explanation of the bottleneck source and the measured effect
+- Baseline and impaired benchmark screenshots
+- The `tc qdisc show dev eth0` output showing the applied impairment
+- A results table populated with the measured request counts, success rates,
+  and mean request times
+- A brief comparison of the observed latency and availability

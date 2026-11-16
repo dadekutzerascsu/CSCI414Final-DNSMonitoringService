@@ -24,14 +24,14 @@ services:
     environment:
       MONGODB_URI: mongodb://dnsapp:dnsapp-local-only@mongodb:27017/dns_monitor?authSource=dns_monitor
       DATABASE_NAME: dns_monitor
-      # Optional TLS: mount generated certs and uncomment the two lines below.
-      # TLS_CERTFILE: /run/secrets/api.crt
-      # TLS_KEYFILE: /run/secrets/api.key
+      TLS_CERTFILE: ${TLS_CERTFILE:-}
+      TLS_KEYFILE: ${TLS_KEYFILE:-}
     ports:
       - "127.0.0.1:8000:8000"
       - "172.28.10.1:8000:8000"
     volumes:
       - ../data:/data:ro
+      - ../security/certs:/run/secrets:ro
     networks:
       service_net:
         ipv4_address: 172.28.20.10
@@ -51,6 +51,8 @@ services:
     build:
       context: ..
       dockerfile: docker/client.Dockerfile
+    cap_add:
+      - NET_ADMIN
     networks:
       client_net:
         ipv4_address: 172.28.10.10
