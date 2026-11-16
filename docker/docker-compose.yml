@@ -24,6 +24,9 @@ services:
     environment:
       MONGODB_URI: mongodb://dnsapp:dnsapp-local-only@mongodb:27017/dns_monitor?authSource=dns_monitor
       DATABASE_NAME: dns_monitor
+      # Optional TLS: mount generated certs and uncomment the two lines below.
+      # TLS_CERTFILE: /run/secrets/api.crt
+      # TLS_KEYFILE: /run/secrets/api.key
     ports:
       - "127.0.0.1:8000:8000"
       - "172.28.10.1:8000:8000"
